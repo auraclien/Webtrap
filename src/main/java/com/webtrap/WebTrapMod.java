@@ -7,6 +7,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
@@ -17,7 +18,7 @@ public class WebTrapMod implements ClientModInitializer {
     private boolean wasVPressed = false;
     private boolean wasBPressed = false;
     
-    // Настройки авто-копки
+    // Переменные для копки
     private boolean isDigging = false;
     private LivingEntity digTarget = null;
     private int blocksDug = 0;
@@ -46,11 +47,9 @@ public class WebTrapMod implements ClientModInitializer {
                     wasBPressed = true;
                     
                     if (isDigging) {
-                        // Отмена
                         isDigging = false;
                         client.player.sendMessage(net.minecraft.text.Text.literal("§cАвто-копка отменена"), true);
                     } else {
-                        // Запуск
                         LivingEntity target = findClosestTarget(client, 4.0);
                         if (target != null) {
                             digTarget = target;
@@ -67,7 +66,7 @@ public class WebTrapMod implements ClientModInitializer {
                 wasBPressed = false;
             }
 
-            // --- ЛОГИКА АВТО-КОПКИ (Выполняется каждый тик) ---
+            // --- ЛОГИКА АВТО-КОПКИ ---
             if (isDigging) {
                 doAutoDig(client);
             }
@@ -75,18 +74,25 @@ public class WebTrapMod implements ClientModInitializer {
     }
 
     private void doAutoDig(MinecraftClient client) {
-        // Если цель умерла или убежала
+        // Если цель умерла или убежала дальше 5 блоков
         if (digTarget == null || !digTarget.isAlive() || client.player.distanceTo(digTarget) > 5.0) {
             isDigging = false;
             client.player.sendMessage(net.minecraft.text.Text.literal("§cЦель потеряна!"), true);
             return;
         }
 
-        // Задержка между копанием (чтобы моб успевал падать)
         if (digDelay > 0) {
             digDelay--;
             return;
         }
+
+        // --- ТЕЛЕПОРТАЦИЯ ВНУТРЬ ЦЕЛИ ---
+        // Отправляем пакет позиции прямо в центр моба (на его координаты X, Y, Z)
+        client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.PositionAndOnGround(
+                digTarget.getX(), digTarget.getY(), digTarget.getZ(), true, false
+        ));
+        // И на клиенте тоже телепортируемся
+        client.player.setPosition(digTarget.getX(), digTarget.getY(), digTarget.getZ());
 
         // Ищем кирку и берем её в руку
         int pickaxeSlot = -1;
@@ -99,18 +105,18 @@ public class WebTrapMod implements ClientModInitializer {
         }
         
         if (pickaxeSlot == -1) {
-            client.player.sendMessage(net.minecraft.text.Text.literal("§cНет кирки в хотбаре!"), true);
+            client.player.sendMessage(net.minecraft.text.Text.literal("§cНет кирки!"), true);
             isDigging = false;
             return;
         }
         client.player.getInventory().selectedSlot = pickaxeSlot;
 
-        // Получаем блок под целью
-        BlockPos targetPos = digTarget.getBlockPos().down();
+        // Определяем блок под нами (и под мобом)
+        BlockPos targetPos = client.player.getBlockPos().down();
 
-        // Если блок уже воздух (моб падает) - ждем
+        // Если блок уже воздух (мы падаем)
         if (client.world.getBlockState(targetPos).isAir()) {
-            digDelay = 2; // Ждем 2 тика, пока моб упадет
+            digDelay = 2; // Ждем, пока упадем
             return;
         }
 
@@ -118,9 +124,8 @@ public class WebTrapMod implements ClientModInitializer {
         client.interactionManager.updateBlockBreakingProgress(targetPos, Direction.UP);
         client.player.swingHand(Hand.MAIN_HAND);
         
-        // Счетчик прокопанных блоков и задержка
         blocksDug++;
-        digDelay = 2; // Задержка перед следующим блоком (чтобы камера не лагала)
+        digDelay = 2; // Задержка перед следующим блоком
 
         // Если прокопали 5 блоков - ставим паутину
         if (blocksDug >= MAX_DIG_DEPTH) {
@@ -134,13 +139,13 @@ public class WebTrapMod implements ClientModInitializer {
             
             if (webSlot != -1) {
                 client.player.getInventory().selectedSlot = webSlot;
-                // Ставим паутину на место последнего блока (где сейчас стоит моб)
+                // Ставим паутину на место последнего блока (где мы сейчас)
                 client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, 
-                    new BlockHitResult(digTarget.getPos(), Direction.UP, digTarget.getBlockPos(), false));
+                    new BlockHitResult(client.player.getPos(), Direction.UP, client.player.getBlockPos().down(), false));
                 client.player.swingHand(Hand.MAIN_HAND);
                 client.player.sendMessage(net.minecraft.text.Text.literal("§aГотово! Моб в паутине."), true);
             } else {
-                client.player.sendMessage(net.minecraft.text.Text.literal("§cНет паутины в хотбаре!"), true);
+                client.player.sendMessage(net.minecraft.text.Text.literal("§cНет паутины!"), true);
             }
             
             isDigging = false;
@@ -149,7 +154,6 @@ public class WebTrapMod implements ClientModInitializer {
         }
     }
 
-    // --- ЛОГИКА ПАУТИНЫ (Клавиша V, оставил без изменений) ---
     private void placeWeb(MinecraftClient client) {
         int webSlot = -1;
         for (int i = 0; i < 9; i++) {
@@ -160,7 +164,7 @@ public class WebTrapMod implements ClientModInitializer {
         }
 
         if (webSlot == -1) {
-            client.player.sendMessage(net.minecraft.text.Text.literal("§cНет паутины в хотбаре!"), true);
+            client.player.sendMessage(net.minecraft.text.Text.literal("§cНет паутины!"), true);
             return;
         }
 
@@ -197,4 +201,4 @@ public class WebTrapMod implements ClientModInitializer {
         }
         return target;
     }
-} 
+}
